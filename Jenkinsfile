@@ -9,7 +9,7 @@ pipeline {
         )
         choice(
             name: 'JDK_VERSION',
-            choices: ['8', '11', '17', '21'],
+            choices: ['17', '21', '11', '8'],
             description: 'JDK 版本 (Java 应用)'
         )
         choice(
