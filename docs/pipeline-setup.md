@@ -15,12 +15,12 @@
 
 ```
 jenkins-build/
-├── Jenkinsfile                      # 流水线定义（声明式 Pipeline）
-├── docker/                          # 多阶段 Dockerfile
+├── Jenkinsfile                      # 流水线定义（通用化，支持远程仓库）
+├── docker/                          # 预置多阶段 Dockerfile 模板
 │   ├── Dockerfile.java
 │   ├── Dockerfile.python
 │   └── Dockerfile.go
-├── test-apps/                       # 示例应用源码
+├── test-apps/                       # 示例应用源码（本地测试用）
 │   ├── java-app/                    # Spring Boot 3.2.5, Java 17
 │   │   ├── pom.xml
 │   │   └── src/
@@ -33,6 +33,13 @@ jenkins-build/
 └── docs/
     └── pipeline-setup.md            # 本文档
 ```
+
+**两种使用模式：**
+
+| 模式 | GIT_REPO | 说明 |
+|------|----------|------|
+| 远程仓库 | 填写 URL + 用户名/Token | 拉取任意 Git 仓库，自动检测类型，编译打包推送 |
+| 本地项目 | 留空 | 使用 Jenkins 已检出的代码（兼容 test-apps） |
 
 ---
 
@@ -680,46 +687,79 @@ docker.withRegistry(
 
 ## 四、Docker 镜像构建完整流程
 
-以 Java 为例，Pipeline 的 Docker 构建推送阶段执行过程：
+以 Java 为例（远程仓库模式），Pipeline 的 Docker 构建推送阶段执行过程：
 
-**1. 计算镜像 Tag**
+**1. Clone 项目代码**
+
+```groovy
+// GIT_REPO=https://github.com/your-org/myapp.git
+// GIT_USERNAME=user, GIT_TOKEN=ghp_xxx
+// → 构造认证 URL: https://user:ghp_xxx@github.com/your-org/myapp.git
+// → checkout 到 workspace/project/
+env.PROJECT_DIR = 'project'
+```
+
+**2. 计算构建目录**
+
+```groovy
+// APP_SUBDIR=. → BUILD_DIR=project
+// APP_SUBDIR=src → BUILD_DIR=project/src
+env.BUILD_DIR = 'project'
+```
+
+**3. 自动检测/确认应用类型**
+
+```groovy
+// APP_TYPE=auto 时检测 BUILD_DIR 下的标志文件
+// pom.xml → java, go.mod → go, requirements.txt → python
+env.DETECTED_APP_TYPE = 'java'
+```
+
+**4. 确定 Dockerfile**
+
+```groovy
+// 优先级: DOCKERFILE_PATH > BUILD_DIR/Dockerfile > docker/Dockerfile.{type}
+env.DOCKERFILE = '/var/jenkins_home/workspace/.../docker/Dockerfile.java'
+```
+
+**5. 确定镜像名称**
+
+```groovy
+// IMAGE_NAME 未指定 → 自动使用仓库名
+env.IMAGE_NAME = 'myapp'
+```
+
+**6. 计算镜像 Tag**
 
 ```groovy
 def tag = params.IMAGE_TAG ?: env.GIT_COMMIT_SHORT
-def fullImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${params.IMAGE_NAME}:${tag}"
-// 结果: 10.196.128.70:8090/myproject/java-app:latest
+def fullImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${env.IMAGE_NAME}:${tag}"
+// 结果: 10.196.128.70:8090/myproject/myapp:abc1234
 ```
 
-**2. 确定 Dockerfile 路径**
-
-```groovy
-def dockerfile = "${env.WORKSPACE}/docker/Dockerfile.${params.APP_TYPE}"
-// 结果: /var/jenkins_home/workspace/JenkinsfilePipline/docker/Dockerfile.java
-```
-
-**3. 设置构建参数**
+**7. 设置构建参数**
 
 ```groovy
 def buildArgs = "--build-arg JDK_VERSION=${params.JDK_VERSION}"
 // 结果: --build-arg JDK_VERSION=17
 ```
 
-**4. 切换到应用目录执行构建**
+**8. 切换到构建目录执行 Docker 构建**
 
 ```groovy
-dir("test-apps/${params.APP_TYPE}-app") {
+dir(env.BUILD_DIR) {
     docker.withRegistry("http://${params.HARBOR_URL}", env.HARBOR_CREDENTIALS) {
-        def image = docker.build(fullImage, "${buildArgs} -f ${dockerfile} .")
+        def image = docker.build(fullImage, "${buildArgs} -f ${env.DOCKERFILE} .")
         image.push()
     }
 }
 ```
 
-执行过程会发生：
-1. `docker.withRegistry` 触发 `docker login -u admin --password-stdin http://10.196.128.70:8090`
-2. `docker.build` 触发 `docker build --build-arg JDK_VERSION=17 -f /path/to/Dockerfile.java -t 10.196.128.70:8090/myproject/java-app:latest .`
-3. Docker 执行 Dockerfile 中的多阶段构建（Maven 编译 → JRE 运行镜像）
-4. `image.push()` 触发 `docker push 10.196.128.70:8090/myproject/java-app:latest`
+执行过程：
+1. `docker.withRegistry` → `docker login -u admin --password-stdin http://10.196.128.70:8090`
+2. `docker.build` → `docker build --build-arg JDK_VERSION=17 -f /path/to/Dockerfile.java -t 10.196.128.70:8090/myproject/myapp:abc1234 .`
+3. Docker 执行 Dockerfile 多阶段构建（Maven 编译 → JRE 运行镜像）
+4. `image.push()` → `docker push 10.196.128.70:8090/myproject/myapp:abc1234`
 
 **Dockerfile.java 多阶段构建流程**:
 
@@ -740,50 +780,142 @@ dir("test-apps/${params.APP_TYPE}-app") {
 
 ---
 
-## 五、触发构建命令参考
+## 五、通用流水线参数说明
 
-### Java 应用
+Pipeline 已通用化，不再硬编码 `test-apps/` 路径。支持从任意 Git 仓库拉取代码并构建。
+
+### 完整参数列表
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| GIT_REPO | string | (空) | Git 仓库地址，留空则使用已检出代码 |
+| GIT_USERNAME | string | (空) | Git 用户名（私有仓库认证） |
+| GIT_TOKEN | password | (空) | Git Token 或密码（私有仓库认证） |
+| GIT_BRANCH | string | main | Git 分支 |
+| APP_TYPE | choice | auto | 应用类型：auto/java/python/go |
+| APP_SUBDIR | string | . | 代码在仓库中的子目录 |
+| DOCKERFILE_PATH | string | (空) | Dockerfile 路径，留空自动选择 |
+| JDK_VERSION | choice | 17 | JDK 版本（Java） |
+| PYTHON_VERSION | choice | 3.11 | Python 版本 |
+| GO_VERSION | choice | 1.22 | Go 版本 |
+| HARBOR_URL | string | 10.196.128.70:8090 | Harbor 地址 |
+| HARBOR_PROJECT | string | myproject | Harbor 项目名 |
+| IMAGE_NAME | string | (空) | 镜像名，留空自动使用仓库名 |
+| IMAGE_TAG | string | (空) | 镜像 Tag，留空使用 git commit sha |
+| SKIP_TESTS | boolean | false | 跳过测试 |
+| PUSH_LATEST | boolean | false | 同时推送 latest 标签 |
+
+### Dockerfile 选择优先级
+
+1. 参数 `DOCKERFILE_PATH` 指定 → 直接使用
+2. 项目目录下存在 `Dockerfile` → 使用项目自带
+3. 使用预置模板 `docker/Dockerfile.{java|python|go}`
+
+### APP_TYPE 自动检测规则
+
+| 检测文件 | 判定类型 |
+|----------|----------|
+| pom.xml | java |
+| go.mod | go |
+| requirements.txt / setup.py / pyproject.toml | python |
+
+---
+
+## 六、触发构建命令参考
+
+### 远程仓库构建（推荐方式）
 
 ```bash
+# Java 项目
+curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
+  -X POST "http://localhost:9090/job/JenkinsfilePipline/buildWithParameters" \
+  --data-urlencode "GIT_REPO=https://github.com/your-org/java-project.git" \
+  --data-urlencode "GIT_USERNAME=your-username" \
+  --data-urlencode "GIT_TOKEN=ghp_xxxxxxxxxxxx" \
+  --data-urlencode "GIT_BRANCH=main" \
+  --data-urlencode "APP_TYPE=java" \
+  --data-urlencode "JDK_VERSION=17" \
+  --data-urlencode "IMAGE_NAME=java-app" \
+  --data-urlencode "IMAGE_TAG=v1.0.0"
+```
+
+```bash
+# Python 项目（自动检测类型）
+curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
+  -X POST "http://localhost:9090/job/JenkinsfilePipline/buildWithParameters" \
+  --data-urlencode "GIT_REPO=https://github.com/your-org/python-project.git" \
+  --data-urlencode "GIT_USERNAME=your-username" \
+  --data-urlencode "GIT_TOKEN=ghp_xxxxxxxxxxxx" \
+  --data-urlencode "GIT_BRANCH=main" \
+  --data-urlencode "APP_TYPE=auto" \
+  --data-urlencode "IMAGE_NAME=python-app"
+```
+
+```bash
+# Go 项目（子目录构建）
+curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
+  -X POST "http://localhost:9090/job/JenkinsfilePipline/buildWithParameters" \
+  --data-urlencode "GIT_REPO=https://github.com/your-org/go-project.git" \
+  --data-urlencode "GIT_USERNAME=your-username" \
+  --data-urlencode "GIT_TOKEN=ghp_xxxxxxxxxxxx" \
+  --data-urlencode "GIT_BRANCH=main" \
+  --data-urlencode "APP_TYPE=go" \
+  --data-urlencode "APP_SUBDIR=cmd/server" \
+  --data-urlencode "IMAGE_NAME=go-app"
+```
+
+```bash
+# 使用项目自带 Dockerfile
+curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
+  -X POST "http://localhost:9090/job/JenkinsfilePipline/buildWithParameters" \
+  --data-urlencode "GIT_REPO=https://github.com/your-org/project.git" \
+  --data-urlencode "GIT_USERNAME=your-username" \
+  --data-urlencode "GIT_TOKEN=ghp_xxxxxxxxxxxx" \
+  --data-urlencode "APP_TYPE=auto" \
+  --data-urlencode "DOCKERFILE_PATH=deploy/Dockerfile" \
+  --data-urlencode "IMAGE_NAME=my-app"
+```
+
+### 本地 test-apps 构建（兼容旧模式）
+
+GIT_REPO 留空则使用 Jenkins 已检出的代码，保持向后兼容：
+
+```bash
+# Java (test-apps)
 curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
   -X POST "http://localhost:9090/job/JenkinsfilePipline/buildWithParameters" \
   --data-urlencode "APP_TYPE=java" \
   --data-urlencode "JDK_VERSION=17" \
-  --data-urlencode "HARBOR_URL=10.196.128.70:8090" \
-  --data-urlencode "HARBOR_PROJECT=myproject" \
+  --data-urlencode "APP_SUBDIR=test-apps/java-app" \
   --data-urlencode "IMAGE_NAME=java-app" \
   --data-urlencode "IMAGE_TAG=latest"
 ```
 
-### Python 应用
-
 ```bash
+# Python (test-apps)
 curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
   -X POST "http://localhost:9090/job/JenkinsfilePipline/buildWithParameters" \
   --data-urlencode "APP_TYPE=python" \
   --data-urlencode "PYTHON_VERSION=3.11" \
-  --data-urlencode "HARBOR_URL=10.196.128.70:8090" \
-  --data-urlencode "HARBOR_PROJECT=myproject" \
+  --data-urlencode "APP_SUBDIR=test-apps/python-app" \
   --data-urlencode "IMAGE_NAME=python-app" \
   --data-urlencode "IMAGE_TAG=latest"
 ```
 
-### Go 应用
-
 ```bash
+# Go (test-apps)
 curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
   -X POST "http://localhost:9090/job/JenkinsfilePipline/buildWithParameters" \
   --data-urlencode "APP_TYPE=go" \
   --data-urlencode "GO_VERSION=1.22" \
-  --data-urlencode "HARBOR_URL=10.196.128.70:8090" \
-  --data-urlencode "HARBOR_PROJECT=myproject" \
+  --data-urlencode "APP_SUBDIR=test-apps/go-app" \
   --data-urlencode "IMAGE_NAME=go-app" \
   --data-urlencode "IMAGE_TAG=latest"
 ```
 
 ---
 
-## 六、构建历史总览
+## 七、构建历史总览
 
 | 构建 | APP_TYPE | 关键问题 | 结果 |
 |------|----------|----------|------|
@@ -804,7 +936,7 @@ curl -u thr:11236a348b3451e426fdadeb5da8bd2ce0 \
 
 ---
 
-## 七、Harbor 运维管理
+## 八、Harbor 运维管理
 
 ### 7.1 启动
 

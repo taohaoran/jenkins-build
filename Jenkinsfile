@@ -1,12 +1,58 @@
 pipeline {
     agent any
 
+    options {
+        timeout(time: 1, unit: 'HOURS')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
     parameters {
+        // ============================================================
+        //  Git 仓库配置
+        // ============================================================
+        string(
+            name: 'GIT_REPO',
+            defaultValue: '',
+            description: 'Git 仓库地址 (例: https://github.com/user/repo.git)。留空则使用 Jenkins 已检出的代码'
+        )
+        string(
+            name: 'GIT_USERNAME',
+            defaultValue: '',
+            description: 'Git 用户名 (私有仓库认证)'
+        )
+        password(
+            name: 'GIT_TOKEN',
+            defaultValue: '',
+            description: 'Git Token 或密码 (私有仓库认证)'
+        )
+        string(
+            name: 'GIT_BRANCH',
+            defaultValue: 'main',
+            description: 'Git 分支'
+        )
+
+        // ============================================================
+        //  项目配置
+        // ============================================================
         choice(
             name: 'APP_TYPE',
-            choices: ['java', 'python', 'go'],
-            description: '选择应用类型'
+            choices: ['auto', 'java', 'python', 'go'],
+            description: '应用类型。auto = 自动检测 (pom.xml→java, go.mod→go, requirements.txt/setup.py/pyproject.toml→python)'
         )
+        string(
+            name: 'APP_SUBDIR',
+            defaultValue: '.',
+            description: '应用代码在仓库中的子目录路径 (例: src/app, . 表示仓库根目录)'
+        )
+        string(
+            name: 'DOCKERFILE_PATH',
+            defaultValue: '',
+            description: 'Dockerfile 路径。留空则按优先级自动选择: 1)项目自带Dockerfile 2)预置docker/Dockerfile.{type}'
+        )
+
+        // ============================================================
+        //  构建工具版本
+        // ============================================================
         choice(
             name: 'JDK_VERSION',
             choices: ['17', '21', '11', '8'],
@@ -14,24 +60,18 @@ pipeline {
         )
         choice(
             name: 'PYTHON_VERSION',
-            choices: ['3.9', '3.10', '3.11', '3.12'],
+            choices: ['3.11', '3.12', '3.10', '3.9'],
             description: 'Python 版本 (Python 应用)'
         )
         choice(
             name: 'GO_VERSION',
-            choices: ['1.21', '1.22', '1.23'],
+            choices: ['1.22', '1.23', '1.21'],
             description: 'Go 版本 (Go 应用)'
         )
-        string(
-            name: 'GIT_REPO',
-            defaultValue: '',
-            description: 'Git 仓库地址 (留空则使用已检出的代码)'
-        )
-        string(
-            name: 'GIT_BRANCH',
-            defaultValue: 'main',
-            description: 'Git 分支'
-        )
+
+        // ============================================================
+        //  Harbor 镜像仓库配置
+        // ============================================================
         string(
             name: 'HARBOR_URL',
             defaultValue: '10.196.128.70:8090',
@@ -45,13 +85,17 @@ pipeline {
         string(
             name: 'IMAGE_NAME',
             defaultValue: '',
-            description: 'Docker 镜像名称'
+            description: 'Docker 镜像名称 (留空则使用仓库名)'
         )
         string(
             name: 'IMAGE_TAG',
             defaultValue: '',
             description: 'Docker 镜像 Tag (留空则使用 git commit sha)'
         )
+
+        // ============================================================
+        //  构建选项
+        // ============================================================
         booleanParam(
             name: 'SKIP_TESTS',
             defaultValue: false,
@@ -69,41 +113,115 @@ pipeline {
     }
 
     stages {
+        // ============================================================
+        //  Checkout — 拉取项目代码
+        // ============================================================
         stage('Checkout') {
             steps {
                 script {
                     if (params.GIT_REPO?.trim()) {
+                        def repoUrl = params.GIT_REPO.trim()
+                        if (params.GIT_USERNAME?.trim() && params.GIT_TOKEN?.trim()) {
+                            def encodedUser = java.net.URLEncoder.encode(params.GIT_USERNAME.trim(), 'UTF-8')
+                            def encodedToken = java.net.URLEncoder.encode(params.GIT_TOKEN.trim(), 'UTF-8')
+                            repoUrl = repoUrl.replaceFirst('https://', "https://${encodedUser}:${encodedToken}@")
+                        }
+
+                        echo "Cloning ${params.GIT_REPO} (branch: ${params.GIT_BRANCH})"
+
                         checkout([
                             $class: 'GitSCM',
-                            branches: [[name: "${params.GIT_BRANCH}"]],
-                            userRemoteConfigs: [[url: "${params.GIT_REPO}", credentialsId: 'jenkins-token']]
+                            branches: [[name: "refs/heads/${params.GIT_BRANCH}"]],
+                            userRemoteConfigs: [[url: repoUrl]],
+                            extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'project']]
                         ])
+                        env.PROJECT_DIR = 'project'
+                    } else {
+                        echo 'GIT_REPO 为空，使用当前工作空间代码'
+                        env.PROJECT_DIR = '.'
                     }
+
+                    // 计算构建目录
+                    if (params.APP_SUBDIR?.trim() && params.APP_SUBDIR != '.') {
+                        env.BUILD_DIR = "${env.PROJECT_DIR}/${params.APP_SUBDIR.trim()}"
+                    } else {
+                        env.BUILD_DIR = env.PROJECT_DIR
+                    }
+
+                    // 获取 git commit sha
                     env.GIT_COMMIT_SHORT = sh(
-                        script: 'git rev-parse --short HEAD',
+                        script: "cd ${env.PROJECT_DIR} && git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
+
+                    echo "Project dir: ${env.PROJECT_DIR}, Build dir: ${env.BUILD_DIR}"
+                    echo "Git commit: ${env.GIT_COMMIT_SHORT}"
+
+                    // --------------------------------------------------
+                    //  自动检测应用类型
+                    // --------------------------------------------------
+                    if (params.APP_TYPE == 'auto') {
+                        if (fileExists("${env.BUILD_DIR}/pom.xml")) {
+                            env.DETECTED_APP_TYPE = 'java'
+                        } else if (fileExists("${env.BUILD_DIR}/go.mod")) {
+                            env.DETECTED_APP_TYPE = 'go'
+                        } else if (fileExists("${env.BUILD_DIR}/requirements.txt") ||
+                                   fileExists("${env.BUILD_DIR}/setup.py") ||
+                                   fileExists("${env.BUILD_DIR}/pyproject.toml")) {
+                            env.DETECTED_APP_TYPE = 'python'
+                        } else {
+                            error("无法自动检测应用类型。请在 ${env.BUILD_DIR} 下提供 pom.xml / go.mod / requirements.txt，或手动指定 APP_TYPE")
+                        }
+                        echo "自动检测应用类型: ${env.DETECTED_APP_TYPE}"
+                    } else {
+                        env.DETECTED_APP_TYPE = params.APP_TYPE
+                    }
+
+                    // --------------------------------------------------
+                    //  确定 Dockerfile
+                    // --------------------------------------------------
+                    if (params.DOCKERFILE_PATH?.trim()) {
+                        env.DOCKERFILE = params.DOCKERFILE_PATH.trim()
+                    } else if (fileExists("${env.BUILD_DIR}/Dockerfile")) {
+                        env.DOCKERFILE = "${env.BUILD_DIR}/Dockerfile"
+                    } else {
+                        env.DOCKERFILE = "${env.WORKSPACE}/docker/Dockerfile.${env.DETECTED_APP_TYPE}"
+                    }
+                    echo "Dockerfile: ${env.DOCKERFILE}"
+
+                    // --------------------------------------------------
+                    //  确定镜像名称
+                    // --------------------------------------------------
+                    if (!params.IMAGE_NAME?.trim()) {
+                        def repoName = sh(
+                            script: "cd ${env.PROJECT_DIR} && basename `git rev-parse --show-toplevel`",
+                            returnStdout: true
+                        ).trim()
+                        env.IMAGE_NAME = repoName
+                    } else {
+                        env.IMAGE_NAME = params.IMAGE_NAME.trim()
+                    }
                 }
             }
         }
 
         // ============================================================
-        //  Java 构建
+        //  Java 构建 (编译 + 测试)
         // ============================================================
         stage('Build Java') {
             when {
-                expression { params.APP_TYPE == 'java' }
+                expression { env.DETECTED_APP_TYPE == 'java' }
             }
             steps {
                 script {
                     def mavenImage = "maven:3.9-eclipse-temurin-${params.JDK_VERSION}"
                     def mavenArgs = params.SKIP_TESTS ? 'clean package -DskipTests' : 'clean package'
 
-                    dir("test-apps/java-app") {
+                    dir(env.BUILD_DIR) {
                         docker.image(mavenImage).inside(
                             "-v ${env.HOME}/.m2:/root/.m2"
                         ) {
-                            sh "mvn ${mavenArgs}"
+                            sh "mvn ${mavenArgs} -B"
                             sh 'cp target/*.jar app.jar'
                         }
                     }
@@ -116,15 +234,15 @@ pipeline {
         // ============================================================
         stage('Build Python') {
             when {
-                expression { params.APP_TYPE == 'python' }
+                expression { env.DETECTED_APP_TYPE == 'python' }
             }
             steps {
                 script {
                     def pythonImage = "python:${params.PYTHON_VERSION}"
 
-                    dir("test-apps/python-app") {
+                    dir(env.BUILD_DIR) {
                         docker.image(pythonImage).inside(
-                            "-v ${env.WORKSPACE}:/workspace -w /workspace/test-apps/python-app"
+                            "-v ${env.WORKSPACE}:/workspace -w /workspace/${env.BUILD_DIR}"
                         ) {
                             sh '''
                                 pip install --no-cache-dir -r requirements.txt
@@ -140,19 +258,19 @@ pipeline {
         }
 
         // ============================================================
-        //  Go 构建
+        //  Go 构建 (编译 + 测试)
         // ============================================================
         stage('Build Go') {
             when {
-                expression { params.APP_TYPE == 'go' }
+                expression { env.DETECTED_APP_TYPE == 'go' }
             }
             steps {
                 script {
                     def goImage = "golang:${params.GO_VERSION}"
 
-                    dir("test-apps/go-app") {
+                    dir(env.BUILD_DIR) {
                         docker.image(goImage).inside(
-                            "-v ${env.WORKSPACE}:/workspace -w /workspace/test-apps/go-app"
+                            "-v ${env.WORKSPACE}:/workspace -w /workspace/${env.BUILD_DIR}"
                         ) {
                             sh '''
                                 go mod download
@@ -175,38 +293,37 @@ pipeline {
         stage('Docker Build & Push') {
             steps {
                 script {
-                    def tag = params.IMAGE_TAG ?: env.GIT_COMMIT_SHORT
-                    def fullImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${params.IMAGE_NAME}:${tag}"
-
-                    def dockerfile = "${env.WORKSPACE}/docker/Dockerfile.${params.APP_TYPE}"
+                    def tag = params.IMAGE_TAG?.trim() ?: env.GIT_COMMIT_SHORT
+                    def fullImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${env.IMAGE_NAME}:${tag}"
 
                     echo "Building image: ${fullImage}"
-                    echo "Using Dockerfile: ${dockerfile}"
+                    echo "Dockerfile: ${env.DOCKERFILE}"
+                    echo "Build context: ${env.BUILD_DIR}"
 
                     def buildArgs = ''
-                    if (params.APP_TYPE == 'java') {
+                    if (env.DETECTED_APP_TYPE == 'java') {
                         buildArgs = "--build-arg JDK_VERSION=${params.JDK_VERSION}"
-                    } else if (params.APP_TYPE == 'python') {
+                    } else if (env.DETECTED_APP_TYPE == 'python') {
                         buildArgs = "--build-arg PYTHON_VERSION=${params.PYTHON_VERSION}"
-                    } else if (params.APP_TYPE == 'go') {
+                    } else if (env.DETECTED_APP_TYPE == 'go') {
                         buildArgs = "--build-arg GO_VERSION=${params.GO_VERSION}"
                     }
 
-                    dir("test-apps/${params.APP_TYPE}-app") {
+                    dir(env.BUILD_DIR) {
                         docker.withRegistry(
                             "http://${params.HARBOR_URL}",
                             env.HARBOR_CREDENTIALS
                         ) {
                             def image = docker.build(
                                 fullImage,
-                                "${buildArgs} -f ${dockerfile} ."
+                                "${buildArgs} -f ${env.DOCKERFILE} ."
                             )
                             image.push()
                             echo "Pushed: ${fullImage}"
 
                             if (params.PUSH_LATEST) {
                                 image.push('latest')
-                                echo "Pushed: ${fullImage} (latest)"
+                                echo "Pushed latest tag"
                             }
                         }
                     }
@@ -218,8 +335,8 @@ pipeline {
     post {
         success {
             script {
-                def tag = params.IMAGE_TAG ?: env.GIT_COMMIT_SHORT
-                def fullImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${params.IMAGE_NAME}:${tag}"
+                def tag = params.IMAGE_TAG?.trim() ?: env.GIT_COMMIT_SHORT
+                def fullImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${env.IMAGE_NAME}:${tag}"
                 echo "✓ 构建成功: ${fullImage}"
             }
         }
