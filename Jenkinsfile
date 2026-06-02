@@ -24,8 +24,8 @@ pipeline {
         )
         string(
             name: 'GIT_REPO',
-            defaultValue: 'https://github.com/taohaoran/jenkins-build.git',
-            description: 'Git 仓库地址'
+            defaultValue: '',
+            description: 'Git 仓库地址 (留空则使用已检出的代码)'
         )
         string(
             name: 'GIT_BRANCH',
@@ -73,11 +73,13 @@ pipeline {
         stage('Checkout') {
             steps {
                 script {
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: "${params.GIT_BRANCH}"]],
-                        userRemoteConfigs: [[url: "${params.GIT_REPO}"]]
-                    ])
+                    if (params.GIT_REPO) {
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "${params.GIT_BRANCH}"]],
+                            userRemoteConfigs: [[url: "${params.GIT_REPO}", credentialsId: 'jenkins-token']]
+                        ])
+                    }
                     env.GIT_COMMIT_SHORT = sh(
                         script: 'git rev-parse --short HEAD',
                         returnStdout: true
