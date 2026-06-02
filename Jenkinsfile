@@ -73,7 +73,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 script {
-                    if (params.GIT_REPO) {
+                    if (params.GIT_REPO?.trim()) {
                         checkout([
                             $class: 'GitSCM',
                             branches: [[name: "${params.GIT_BRANCH}"]],
