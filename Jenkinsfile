@@ -100,11 +100,13 @@ pipeline {
                     def mavenImage = "maven:3.9-eclipse-temurin-${params.JDK_VERSION}"
                     def mavenArgs = params.SKIP_TESTS ? 'clean package -DskipTests' : 'clean package'
 
-                    docker.image(mavenImage).inside(
-                        "-v ${env.HOME}/.m2:/root/.m2"
-                    ) {
-                        sh "mvn ${mavenArgs}"
-                        sh 'cp target/*.jar app.jar'
+                    dir("test-apps/java-app") {
+                        docker.image(mavenImage).inside(
+                            "-v ${env.HOME}/.m2:/root/.m2"
+                        ) {
+                            sh "mvn ${mavenArgs}"
+                            sh 'cp target/*.jar app.jar'
+                        }
                     }
                 }
             }
@@ -121,15 +123,17 @@ pipeline {
                 script {
                     def pythonImage = "python:${params.PYTHON_VERSION}"
 
-                    docker.image(pythonImage).inside(
-                        "-v ${env.WORKSPACE}:/workspace -w /workspace"
-                    ) {
-                        sh '''
-                            pip install --no-cache-dir -r requirements.txt
-                            python -m compileall .
-                        '''
-                        if (!params.SKIP_TESTS) {
-                            sh 'python -m pytest --junitxml=test-report.xml || true'
+                    dir("test-apps/python-app") {
+                        docker.image(pythonImage).inside(
+                            "-v ${env.WORKSPACE}:/workspace -w /workspace/test-apps/python-app"
+                        ) {
+                            sh '''
+                                pip install --no-cache-dir -r requirements.txt
+                                python -m compileall .
+                            '''
+                            if (!params.SKIP_TESTS) {
+                                sh 'python -m pytest --junitxml=test-report.xml || true'
+                            }
                         }
                     }
                 }
@@ -147,17 +151,19 @@ pipeline {
                 script {
                     def goImage = "golang:${params.GO_VERSION}"
 
-                    docker.image(goImage).inside(
-                        "-v ${env.WORKSPACE}:/workspace -w /workspace"
-                    ) {
-                        sh '''
-                            go mod download
-                            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-                                -ldflags="-s -w" \
-                                -o app .
-                        '''
-                        if (!params.SKIP_TESTS) {
-                            sh 'go test ./... || true'
+                    dir("test-apps/go-app") {
+                        docker.image(goImage).inside(
+                            "-v ${env.WORKSPACE}:/workspace -w /workspace/test-apps/go-app"
+                        ) {
+                            sh '''
+                                go mod download
+                                CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+                                    -ldflags="-s -w" \
+                                    -o app .
+                            '''
+                            if (!params.SKIP_TESTS) {
+                                sh 'go test ./... || true'
+                            }
                         }
                     }
                 }
@@ -173,11 +179,7 @@ pipeline {
                     def tag = params.IMAGE_TAG ?: env.GIT_COMMIT_SHORT
                     def fullImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${params.IMAGE_NAME}:${tag}"
 
-                    // 根据应用类型选择对应的 Dockerfile
-                    def dockerfile = "docker/Dockerfile.${params.APP_TYPE}"
-                    if (!fileExists(dockerfile)) {
-                        dockerfile = 'Dockerfile'
-                    }
+                    def dockerfile = "${env.WORKSPACE}/docker/Dockerfile.${params.APP_TYPE}"
 
                     echo "Building image: ${fullImage}"
                     echo "Using Dockerfile: ${dockerfile}"
@@ -191,21 +193,22 @@ pipeline {
                         buildArgs = "--build-arg GO_VERSION=${params.GO_VERSION}"
                     }
 
-                    docker.withRegistry(
-                        "https://${params.HARBOR_URL}",
-                        env.HARBOR_CREDENTIALS
-                    ) {
-                        def image = docker.build(
-                            fullImage,
-                            "${buildArgs} -f ${dockerfile} ."
-                        )
-                        image.push()
-                        echo "Pushed: ${fullImage}"
+                    dir("test-apps/${params.APP_TYPE}-app") {
+                        docker.withRegistry(
+                            "https://${params.HARBOR_URL}",
+                            env.HARBOR_CREDENTIALS
+                        ) {
+                            def image = docker.build(
+                                fullImage,
+                                "${buildArgs} -f ${dockerfile} ."
+                            )
+                            image.push()
+                            echo "Pushed: ${fullImage}"
 
-                        if (params.PUSH_LATEST) {
-                            def latestImage = "${params.HARBOR_URL}/${params.HARBOR_PROJECT}/${params.IMAGE_NAME}:latest"
-                            image.push('latest')
-                            echo "Pushed: ${latestImage}"
+                            if (params.PUSH_LATEST) {
+                                image.push('latest')
+                                echo "Pushed: ${fullImage} (latest)"
+                            }
                         }
                     }
                 }
