@@ -1,11 +1,12 @@
 # -------------------------------------------
 #  Go 应用 - 多阶段 Dockerfile
-#  使用方式: docker build --build-arg GO_VERSION=1.22 -f docker/Dockerfile.go .
+#  使用方式: docker build --build-arg GO_VERSION=1.22 --build-arg MAIN_PATH=. -f docker/Dockerfile.go .
 # -------------------------------------------
 
 # -- 构建阶段 --
 ARG GO_VERSION=1.22
 FROM golang:${GO_VERSION}-alpine AS builder
+ARG MAIN_PATH=.
 WORKDIR /build
 RUN apk add --no-cache ca-certificates tzdata
 COPY go.* ./
@@ -13,7 +14,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w" \
-    -o app .
+    -o app ${MAIN_PATH}
 
 # -- 运行阶段 --
 FROM scratch

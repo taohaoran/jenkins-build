@@ -65,7 +65,7 @@ pipeline {
         )
         choice(
             name: 'GO_VERSION',
-            choices: ['1.22', '1.23', '1.21'],
+            choices: ['1.22', '1.23', '1.24', '1.25'],
             description: 'Go 版本 (Go 应用)'
         )
 
@@ -178,6 +178,18 @@ pipeline {
                     }
 
                     // --------------------------------------------------
+                    //  检测 Go 主包路径 (cmd/server, cmd/app, 或根目录)
+                    // --------------------------------------------------
+                    if (env.DETECTED_APP_TYPE == 'go') {
+                        def mainPkg = sh(
+                            script: "cd ${env.BUILD_DIR} && find . -maxdepth 3 -type f -name 'main.go' ! -path '*/vendor/*' | head -1 | xargs dirname 2>/dev/null || echo '.'",
+                            returnStdout: true
+                        ).trim()
+                        env.GO_MAIN_PATH = mainPkg ?: '.'
+                        echo "Go main package path: ${env.GO_MAIN_PATH}"
+                    }
+
+                    // --------------------------------------------------
                     //  确定 Dockerfile
                     // --------------------------------------------------
                     if (params.DOCKERFILE_PATH?.trim()) {
@@ -267,17 +279,18 @@ pipeline {
             steps {
                 script {
                     def goImage = "golang:${params.GO_VERSION}"
+                    def mainPath = env.GO_MAIN_PATH ?: '.'
 
                     dir(env.BUILD_DIR) {
                         docker.image(goImage).inside(
                             "-v ${env.WORKSPACE}:/workspace -w /workspace/${env.BUILD_DIR}"
                         ) {
-                            sh '''
+                            sh """
                                 go mod download
                                 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
                                     -ldflags="-s -w" \
-                                    -o app .
-                            '''
+                                    -o app ${mainPath}
+                            """
                             if (!params.SKIP_TESTS) {
                                 sh 'go test ./... || true'
                             }
@@ -306,7 +319,7 @@ pipeline {
                     } else if (env.DETECTED_APP_TYPE == 'python') {
                         buildArgs = "--build-arg PYTHON_VERSION=${params.PYTHON_VERSION}"
                     } else if (env.DETECTED_APP_TYPE == 'go') {
-                        buildArgs = "--build-arg GO_VERSION=${params.GO_VERSION}"
+                        buildArgs = "--build-arg GO_VERSION=${params.GO_VERSION} --build-arg MAIN_PATH=${env.GO_MAIN_PATH}"
                     }
 
                     dir(env.BUILD_DIR) {
