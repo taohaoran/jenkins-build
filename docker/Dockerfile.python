@@ -1,0 +1,24 @@
+# -------------------------------------------
+#  Python 应用 - 多阶段 Dockerfile
+#  使用方式: docker build --build-arg PYTHON_VERSION=3.11 -f docker/Dockerfile.python .
+# -------------------------------------------
+
+# -- 构建阶段 --
+FROM python:${PYTHON_VERSION} AS builder
+ARG PYTHON_VERSION=3.11
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# -- 运行阶段 --
+FROM python:${PYTHON_VERSION}-slim
+ARG PYTHON_VERSION=3.11
+WORKDIR /app
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+COPY --from=builder /root/.local /home/appuser/.local
+COPY . .
+ENV PATH=/home/appuser/.local/bin:$PATH \
+    PYTHONUNBUFFERED=1
+USER appuser
+EXPOSE 8000
+ENTRYPOINT ["python", "main.py"]
