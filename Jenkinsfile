@@ -122,9 +122,9 @@ pipeline {
                     if (params.GIT_REPO?.trim()) {
                         def repoUrl = params.GIT_REPO.trim()
                         if (params.GIT_USERNAME?.trim() && params.GIT_TOKEN?.trim()) {
-                            def encodedUser = java.net.URLEncoder.encode(params.GIT_USERNAME.trim(), 'UTF-8')
-                            def encodedToken = java.net.URLEncoder.encode(params.GIT_TOKEN.trim(), 'UTF-8')
-                            repoUrl = repoUrl.replaceFirst('https://', "https://${encodedUser}:${encodedToken}@")
+                            def user = params.GIT_USERNAME.trim()
+                            def token = params.GIT_TOKEN.trim()
+                            repoUrl = repoUrl.replaceFirst('https://', "https://${user}:${token}@")
                         }
 
                         echo "Cloning ${params.GIT_REPO} (branch: ${params.GIT_BRANCH})"
