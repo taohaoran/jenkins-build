@@ -34,7 +34,7 @@ pipeline {
         )
         string(
             name: 'HARBOR_URL',
-            defaultValue: 'harbor.example.com',
+            defaultValue: '10.196.128.70:8090',
             description: 'Harbor 私有仓库地址'
         )
         string(
@@ -195,7 +195,7 @@ pipeline {
 
                     dir("test-apps/${params.APP_TYPE}-app") {
                         docker.withRegistry(
-                            "https://${params.HARBOR_URL}",
+                            "http://${params.HARBOR_URL}",
                             env.HARBOR_CREDENTIALS
                         ) {
                             def image = docker.build(
