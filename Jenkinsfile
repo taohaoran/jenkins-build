@@ -24,7 +24,7 @@ pipeline {
         )
         string(
             name: 'GIT_REPO',
-            defaultValue: '',
+            defaultValue: 'https://github.com/taohaoran/jenkins-build.git',
             description: 'Git 仓库地址'
         )
         string(
