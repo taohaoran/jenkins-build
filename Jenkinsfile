@@ -121,9 +121,9 @@ pipeline {
                 script {
                     if (params.GIT_REPO?.trim()) {
                         def repoUrl = params.GIT_REPO.trim()
-                        if (params.GIT_USERNAME?.trim() && params.GIT_TOKEN?.trim()) {
+                        if (params.GIT_USERNAME?.trim() && params.GIT_TOKEN) {
                             def user = params.GIT_USERNAME.trim()
-                            def token = params.GIT_TOKEN.trim()
+                            def token = params.GIT_TOKEN.toString()
                             repoUrl = repoUrl.replaceFirst('https://', "https://${user}:${token}@")
                         }
 
