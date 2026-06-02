@@ -8,7 +8,7 @@ ARG GO_VERSION=1.22
 FROM golang:${GO_VERSION}-alpine AS builder
 WORKDIR /build
 RUN apk add --no-cache ca-certificates tzdata
-COPY go.mod go.sum ./
+COPY go.* ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
