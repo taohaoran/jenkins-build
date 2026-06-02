@@ -4,8 +4,8 @@
 # -------------------------------------------
 
 # -- 构建阶段 --
-FROM maven:3.9-eclipse-temurin-${JDK_VERSION} AS builder
 ARG JDK_VERSION=17
+FROM maven:3.9-eclipse-temurin-${JDK_VERSION} AS builder
 WORKDIR /build
 COPY pom.xml .
 # 利用 Docker 缓存层: 先下载依赖，再拷贝源码

@@ -4,8 +4,8 @@
 # -------------------------------------------
 
 # -- 构建阶段 --
-FROM golang:${GO_VERSION}-alpine AS builder
 ARG GO_VERSION=1.22
+FROM golang:${GO_VERSION}-alpine AS builder
 WORKDIR /build
 RUN apk add --no-cache ca-certificates tzdata
 COPY go.mod go.sum ./

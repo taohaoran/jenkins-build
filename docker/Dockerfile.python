@@ -4,8 +4,8 @@
 # -------------------------------------------
 
 # -- 构建阶段 --
-FROM python:${PYTHON_VERSION} AS builder
 ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION} AS builder
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
