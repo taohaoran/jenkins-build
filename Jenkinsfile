@@ -106,6 +106,20 @@ pipeline {
             defaultValue: false,
             description: '同时推送 latest 标签'
         )
+
+        // ============================================================
+        //  SonarQube 代码分析
+        // ============================================================
+        booleanParam(
+            name: 'SONAR_ANALYSIS',
+            defaultValue: true,
+            description: '执行 SonarQube 代码分析'
+        )
+        string(
+            name: 'SONAR_HOST_URL',
+            defaultValue: 'http://10.196.128.70:9000',
+            description: 'SonarQube 服务地址'
+        )
     }
 
     environment {
@@ -296,6 +310,48 @@ pipeline {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // ============================================================
+        //  SonarQube 代码分析
+        // ============================================================
+        stage('SonarQube Analysis') {
+            when {
+                expression { params.SONAR_ANALYSIS }
+            }
+            steps {
+                script {
+                    def projectKey = "${env.IMAGE_NAME}"
+                    def projectVersion = "${env.GIT_COMMIT_SHORT}"
+                    def sources = env.DETECTED_APP_TYPE == 'go' ? '.' : 'src'
+
+                    // 导出变量供 shell 使用
+                    env.SONAR_PROJECT_KEY = projectKey
+                    env.SONAR_SOURCES = sources
+                    env.SONAR_HOST_URL = params.SONAR_HOST_URL
+
+                    // 使用 withSonarQubeEnv 配置认证环境变量
+                    withSonarQubeEnv('sonar') {
+                        sh '''
+                            SCANNER_VERSION="5.0.1.3006"
+                            SCANNER_HOME="sonar-scanner-cli-${SCANNER_VERSION}-linux-x64"
+                            if [ ! -d "${SCANNER_HOME}" ]; then
+                                echo "Downloading SonarScanner ${SCANNER_VERSION}..."
+                                curl -sL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SCANNER_VERSION}-linux-x64.zip" \
+                                    -o /tmp/sonar-scanner.zip
+                                unzip -qo /tmp/sonar-scanner.zip -d .
+                            fi
+                            ${SCANNER_HOME}/bin/sonar-scanner \
+                                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                -Dsonar.sources=${SONAR_SOURCES} \
+                                -Dsonar.host.url=${SONAR_HOST_URL} \
+                                -Dsonar.sourceEncoding=UTF-8 \
+                                -Dsonar.projectVersion=${GIT_COMMIT_SHORT}
+                        '''
+                    }
+                    echo "SonarQube analysis completed for ${projectKey}"
                 }
             }
         }
