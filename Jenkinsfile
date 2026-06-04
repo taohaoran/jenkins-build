@@ -336,10 +336,10 @@ pipeline {
                     withSonarQubeEnv('sonar') {
                         sh '''
                             SCANNER_VERSION="5.0.1.3006"
-                            SCANNER_HOME="sonar-scanner-cli-${SCANNER_VERSION}-linux-x64"
+                            SCANNER_HOME="sonar-scanner-${SCANNER_VERSION}-linux"
                             if [ ! -d "${SCANNER_HOME}" ]; then
                                 echo "Downloading SonarScanner ${SCANNER_VERSION}..."
-                                curl -sL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SCANNER_VERSION}-linux-x64.zip" \
+                                curl -sL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SCANNER_VERSION}-linux.zip" \
                                     -o /tmp/sonar-scanner.zip
                                 unzip -qo /tmp/sonar-scanner.zip -d .
                             fi
