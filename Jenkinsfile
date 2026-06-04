@@ -348,7 +348,8 @@ pipeline {
                                 -Dsonar.sources=${SONAR_SOURCES} \
                                 -Dsonar.host.url=${SONAR_HOST_URL} \
                                 -Dsonar.sourceEncoding=UTF-8 \
-                                -Dsonar.projectVersion=${GIT_COMMIT_SHORT}
+                                -Dsonar.projectVersion=${GIT_COMMIT_SHORT} \
+                                -Dsonar.token=${SONAR_TOKEN}
                         '''
                     }
                     echo "SonarQube analysis completed for ${projectKey}"
