@@ -325,32 +325,35 @@ pipeline {
                 script {
                     def projectKey = "${env.IMAGE_NAME}"
                     def projectVersion = "${env.GIT_COMMIT_SHORT}"
-                    def sources = env.DETECTED_APP_TYPE == 'go' ? '.' : 'src'
+                    def sources = '.'
 
                     // 导出变量供 shell 使用
                     env.SONAR_PROJECT_KEY = projectKey
                     env.SONAR_SOURCES = sources
                     env.SONAR_HOST_URL = params.SONAR_HOST_URL
 
-                    // 使用 withCredentials 绑定 SonarQube Token
-                    withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
-                        sh '''
-                            SCANNER_VERSION="5.0.1.3006"
-                            SCANNER_HOME="sonar-scanner-${SCANNER_VERSION}-linux"
-                            if [ ! -d "${SCANNER_HOME}" ]; then
-                                echo "Downloading SonarScanner ${SCANNER_VERSION}..."
-                                curl -sL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SCANNER_VERSION}-linux.zip" \
-                                    -o /tmp/sonar-scanner.zip
-                                unzip -qo /tmp/sonar-scanner.zip -d .
-                            fi
-                            ${SCANNER_HOME}/bin/sonar-scanner \
-                                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                -Dsonar.sources=${SONAR_SOURCES} \
-                                -Dsonar.host.url=${SONAR_HOST_URL} \
-                                -Dsonar.sourceEncoding=UTF-8 \
-                                -Dsonar.projectVersion=${GIT_COMMIT_SHORT} \
-                                -Dsonar.token=${SONAR_TOKEN}
-                        '''
+                    // 在项目构建目录中执行 SonarQube 分析
+                    dir(env.BUILD_DIR) {
+                        // 使用 withCredentials 绑定 SonarQube Token
+                        withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                            sh '''
+                                SCANNER_VERSION="5.0.1.3006"
+                                SCANNER_HOME="/tmp/sonar-scanner-${SCANNER_VERSION}-linux"
+                                if [ ! -d "${SCANNER_HOME}" ]; then
+                                    echo "Downloading SonarScanner ${SCANNER_VERSION}..."
+                                    curl -sL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SCANNER_VERSION}-linux.zip" \
+                                        -o /tmp/sonar-scanner.zip
+                                    unzip -qo /tmp/sonar-scanner.zip -d /tmp
+                                fi
+                                ${SCANNER_HOME}/bin/sonar-scanner \
+                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                    -Dsonar.sources=${SONAR_SOURCES} \
+                                    -Dsonar.host.url=${SONAR_HOST_URL} \
+                                    -Dsonar.sourceEncoding=UTF-8 \
+                                    -Dsonar.projectVersion=${GIT_COMMIT_SHORT} \
+                                    -Dsonar.token=${SONAR_TOKEN}
+                            '''
+                        }
                     }
                     echo "SonarQube analysis completed for ${projectKey}"
                 }
