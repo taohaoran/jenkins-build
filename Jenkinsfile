@@ -332,8 +332,8 @@ pipeline {
                     env.SONAR_SOURCES = sources
                     env.SONAR_HOST_URL = params.SONAR_HOST_URL
 
-                    // 使用 withSonarQubeEnv 配置认证环境变量
-                    withSonarQubeEnv('sonar') {
+                    // 使用 withCredentials 绑定 SonarQube Token
+                    withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
                         sh '''
                             SCANNER_VERSION="5.0.1.3006"
                             SCANNER_HOME="sonar-scanner-${SCANNER_VERSION}-linux"
